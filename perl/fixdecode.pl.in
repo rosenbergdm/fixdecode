@@ -1,0 +1,144 @@
+#!/usr/bin/env perl
+# encoding: utf-8
+
+# fixdecode (fixdecode.pl)
+
+my $fixtr_bin = "@bindir@/fixtr";
+my $ddict_dir = "@xmldir@";
+
+use Getopt::Long::Descriptive;
+use IO::File;
+use Cwd;
+use File::Temp;
+
+my $un = "";
+
+
+my ($opt, $usage) = describe_options(
+  "USAGE: " . $0 . ' %o ' . "\n", 
+  [ "input-file|i:s",  "File containing FIX messages to decome." . $un  .  "If omitted, messages will be  read from STDIN", { default => '' } ],
+  [ "output-file|o:s", "FILE to write translation summary to." . $un .  "If ommitted, messages will be written to STDOUT", { default => '' } ],
+  [ "data-dict|d:s",   "FIX DataDictionary XML file.  If omitted an " . $un .  "attempt will be made to guess the FIX version " . $un .  "number and use the corresponding generic dictionary", { default => '' } ],
+  [ "extract-from|x:s","Extract and process embedded FIX Messages ", { default => '' } ],
+  [ "example",         "Display an example of usage" ],
+  [ "help|h",          "Print the usage message"     ],
+);
+
+sub example {
+print <<'EOF';
+
+  Example:
+
+    $ echo '8=FIX.4.2^A9=0^A35=8^A34=0^A52=20091030-13:17:26.349^A49=TEST42VENUE^A56=HFTDemo^A37=OrderId2^A11=<[ORDER2.ClOrdID]>^A21=1^A41=<[ORDER2.ClOrdID]>^A17=ExecId2^A150=0^A39=0^A55=<[ORDER2.Symbol]>^A54=<[ORDER2.Side]>^A38=<[ORDER2.OrderQty]>^A40=<[ORDER2.OrdType]>^A44=<[ORDER2.Price]>^A15=<[ORDER2.Currency]>^A60=20090216-23:54:53.003^A' | fixdecode
+      
+    ################# Produces the Following ##################
+
+    FIX.4.2
+    FIX msg, but bad checksum : expecting 170
+    
+    MSG = 8=FIX.4.2|9=0|35=8|34=0|52=20091030-13:17:26.349|49=TEST42VENUE|56=HFTDemo|37=OrderId2|11=<[ORDER2.ClOrdID]>|21=1|41=<[ORDER2.ClOrdID]>|17=ExecId2|150=0|39=0|55=<[ORDER2.Symbol]>|54=<[ORDER2.Side]>|38=<[ORDER2.OrderQty]>|40=<[ORDER2.OrdType]>|44=<[ORDER2.Price]>|15=<[ORDER2.Currency]>|60=20090216-23:54:53.003|
+    
+      header
+      8 BeginString     : FIX.4.2             
+      9 BodyLength      : 0             
+     35 MsgType         : 8             
+     34 MsgSeqNum       : 0             
+     52 SendingTime     : 20091030-13:17:26.349             
+     49 SenderCompID    : TEST42VENUE             
+     56 TargetCompID    : HFTDemo             
+
+    ExecutionReport
+     37 OrderID         : OrderId2             
+     11 ClOrdID         : <[ORDER2.ClOrdID]>             
+     21 HandlInst       : 1             AUTOMATED_EXECUTION_ORDER_PRIVATE_NO_BROKER_INTERVENTION
+     41 OrigClOrdID     : <[ORDER2.ClOrdID]>             
+     17 ExecID          : ExecId2             
+    150 ExecType        : 0             NEW
+     39 OrdStatus       : 0             NEW
+     55 Symbol          : <[ORDER2.Symbol]>             
+     54 Side            : <[ORDER2.Side]>             
+     38 OrderQty        : <[ORDER2.OrderQty]>             
+     40 OrdType         : <[ORDER2.OrdType]>             
+     44 Price           : <[ORDER2.Price]>             
+     15 Currency        : <[ORDER2.Currency]>             
+     60 TransactTime    : 20090216-23:54:53.003             
+     20 ExecTransType             << missing field
+    
+    trailer
+     10 CheckSum                  << missing field 
+
+EOF
+}
+
+
+
+
+print($usage -> text), exit if $opt->help;
+example , exit if $opt->example;
+
+
+
+my $handle = IO::Handle -> new;
+my $proc_handle = IO::Handle -> new;
+
+if ($opt->extract_from) {
+  my $tmpfile = File::Temp::mktemp('/tmp/fxdecodeXXXXX');
+  system("cat " . Cwd::abs_path($opt->extract_from) . " | grep '8=FIX' | sed -e 's#^.*8=FIX#8=FIX#' -e 's#\" */>.*##g' > $tmpfile");
+  open ($handle, $tmpfile);
+} elsif ($opt->input_file) {
+  open ($handle, $opt->input_file);
+} else { 
+  open ($handle, "<-");
+}
+
+if ($opt->output_file) {
+  open(STDOUT, "> " . ($opt->output_file));
+}
+
+
+my $c = 1;
+
+
+while (<$handle>) {
+  my $msg = $_;
+  chomp $msg;
+  my $fixdict = get_fixdict($opt, $msg, $ddict_dir);
+  open($proc_handle, "/bin/echo '$msg' | tr \\| " . chr(01) . " | " . $fixtr_bin . " -S=" . $fixdict . " |");
+  
+  print "#####################################################################\n";
+  print "######################### FIX MESSAGE $c #############################\n";
+  print "#####################################################################\n";
+  print "\n";
+  print "  Using data dictionary $fixdict\n\n";
+  print <$proc_handle>, "\n\n";
+
+  $c++;
+}
+
+
+sub guess_fixdict {
+  my ($ddict_dir, $instring) = @_;
+  my $fixfile;
+  
+  $instring =~ s/^.*8=FIX\.(.*?).*$/$1/;
+  $instring =~ s/\.//g;
+
+  if (length($instring) > 5) { 
+    $fixfile = "FIX44.xml";
+  } else {
+    opendir(my $dh, $ddict_dir);
+    $fixfile = (sort (grep { /^FIX.*$instring.xml$/ } readdir($dh)))[0];
+    closedir $dh;
+  }
+  return $ddict_dir .  "/" . $fixfile ;
+}
+
+sub get_fixdict {
+  my ($opt, $fixstring, $ddict_dir) = @_;
+  if($opt->data_dict) {
+    return $opt->data_dict;
+  } else {
+    return guess_fixdict($ddict_dir, $fixstring)
+  }
+}
+

@@ -1,0 +1,24 @@
+# Common.mk
+
+# invariant section #####################################
+SRC_ROOT = $(top_builddir)/src
+INC_LIB_ROOT = $(shell \
+	if test "`pushd $(top_builddir)/.. >/dev/null && basename $$PWD && popd >/dev/null`" = "deps"; then \
+		pushd  `ls -d $(top_builddir)/../../*/include/../lib/..` >/dev/null && pwd && popd >/dev/null; \
+	else \
+		pushd $(top_builddir) > /dev/null && pwd && popd > /dev/null; \
+	fi \
+)
+
+INC_ROOT = $(INC_LIB_ROOT)/include
+LIB_ROOT = $(INC_LIB_ROOT)/lib
+BIN_ROOT = $(INC_LIB_ROOT)/bin
+########################################################
+
+XML2INC_DIR = $(shell xml2-config --cflags)
+XML2LIB_DIR = -L$(shell xml2-config --prefix)/lib
+XML2LIBS    = $(shell xml2-config --libs)
+
+PERL = $(which perl)
+
+
